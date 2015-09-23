@@ -1,0 +1,93 @@
+&CONTROL
+!* Edit the variables below to fit desired criteria: 
+!----------------------------------------------------------
+!FSS: Make sure to keep the "," at the end of each definition 
+!       furthermore make sure all real-variables have a "." 
+!----------
+! EXPERIMENT : 
+! DESCRIPTION :
+! PROJECT : 
+! CODE_VERSION : 
+!----------
+! FSS--- a string with regions to simulate, comma seperated
+!regions_string = '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19',
+regions_string = '11',
+! FSS--- meteorological input type
+! so far: CRU and ERAI
+!met_type = 'ERAI',
+met_type = 'ERAI',
+anom_type = 'grid',
+!ncf_clim = 'CRU_t2m_tp_CLIM_1980_to_2009.nc',
+ncf_clim = 'CRU_t2m_tp_CLIM_1961_to_1990.nc',
+
+ncf_crosval= 'cross_validation.nc',
+
+! FSS--- years to simulate
+! including !! the end year
+sim_year_start = 1980,
+sim_year_end = 2009,
+
+! FSS--- precompute year, only taken for MMBM_precompute.f95
+precomp_year_start = 1980,
+precomp_year_end= 2009,
+
+
+!in percent/100 (i.e., 1 = 100 %)
+A_V_scaling_error=0.4,      
+!in percent/100 (i.e., 0.4 = 40 %)
+L_V_scaling_error=1.,      
+!in percent
+area_error_rgi=5.,  
+!in percent/100 (i.e., 5 = 500 %)
+tau_L_error=5.,      
+!in percent/100 (i.e., 5 = 500 %)
+tau_A_error=5.,       
+
+!Bahr et al. 1997, The physical basis...
+gamma_glacier=1.375,     
+
+! =0.191 m^(3-2gamma), Bahr 1997, Global distributions of glacier properties
+! : A stochstic scaling paradigm
+c_a_glacier=0.0340,          
+
+! Bahr et al. 1997, The physical basis...
+q_glacier=2.2,        
+
+!=4.55 m^(3-q), Radic, Hock, Oerlemans 2008: Analysis of scaling methods
+c_l_glacier=0.018,
+
+!Radic & Hock (2010), Regional and global volumes of glaciers derived from...
+gamma_icecap=1.25,
+
+!=1.7026 m^(3-2gamma), Radic & Hock (2010), Regional and global volumes 
+!of glaciers derived from... 
+c_a_icecap=0.0538, 
+    
+!from H = 3.4/(1000^0.5) L^0.5, 3.4 (Patterson 1994) for L and H in m changed to km...
+q_icecap=2.5, 
+
+!and V = 2/3 pi H L^2
+c_l_icecap=0.2252, 
+
+!Temperature of limit for solid precipitation 
+!K => 3 degC
+t_precip_solid = 276.15,
+
+!Temperature above which only melt occurs
+!K => 1 degC
+t_melt = 274.15,
+
+
+!Number of closest glaciers used in weight computation (in case of precompute)
+n_closest_glac = 10,
+
+!Length of climatology
+!years
+length_of_climatology = 31,
+
+!Factor for climatology precipitation
+!Marzeion 2012: 2.5
+clim_precip_factor = 2.5,
+
+
+/

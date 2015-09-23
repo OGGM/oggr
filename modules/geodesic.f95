@@ -1,0 +1,2204 @@
+! The subroutines in this files are documented at
+
+! Code converted using TO_F90 by Alan Miller
+! Date: 2014-06-11  Time: 14:17:12
+
+! http://geographiclib.sourceforge.net/html/Fortran/
+
+!> @file geodesic.for
+!! @brief Implementation of geodesic routines in Fortran
+!!
+!! This is a Fortran implementation of the geodesic algorithms described
+!! in
+!! - C. F. F. Karney,
+!!   <a href="http://dx.doi.org/10.1007/s00190-012-0578-z">
+!!   Algorithms for geodesics</a>,
+!!   J. Geodesy <b>87</b>, 43--55 (2013);
+!!   DOI: <a href="http://dx.doi.org/10.1007/s00190-012-0578-z">
+!!   10.1007/s00190-012-0578-z</a>;
+!!   addenda: <a href="http://geographiclib.sf.net/geod-addenda.html">
+!!   geod-addenda.html</a>.
+!! .
+!! The principal advantages of these algorithms over previous ones
+!! (e.g., Vincenty, 1975) are
+!! - accurate to round off for |<i>f</i>| &lt; 1/50;
+!! - the solution of the inverse problem is always found;
+!! - differential and integral properties of geodesics are computed.
+!!
+!! The shortest path between two points on the ellipsoid at (\e lat1, \e
+!! lon1) and (\e lat2, \e lon2) is called the geodesic.  Its length is
+!! \e s12 and the geodesic from point 1 to point 2 has forward azimuths
+!! \e azi1 and \e azi2 at the two end points.
+!!
+!! Traditionally two geodesic problems are considered:
+!! - the direct problem -- given \e lat1, \e lon1, \e s12, and \e azi1,
+!!   determine \e lat2, \e lon2, and \e azi2.  This is solved by the
+!!   subroutine direct().
+!! - the inverse problem -- given \e lat1, \e lon1, \e lat2, \e lon2,
+!!   determine \e s12, \e azi1, and \e azi2.  This is solved by the
+!!   subroutine invers().
+!!
+!! The ellipsoid is specified by its equatorial radius \e a (typically
+!! in meters) and flattening \e f.  The routines are accurate to round
+!! off with double precision arithmetic provided that |<i>f</i>| &lt;
+!! 1/50; for the WGS84 ellipsoid, the errors are less than 15
+!! nanometers.  (Reasonably accurate results are obtained for |<i>f</i>|
+!! &lt; 1/5.)  For a prolate ellipsoid, specify \e f &lt; 0.
+!!
+!! The routines also calculate several other quantities of interest
+!! - \e SS12 is the area between the geodesic from point 1 to point 2
+!!   and the equator; i.e., it is the area, measured counter-clockwise,
+!!   of the geodesic quadrilateral with corners (\e lat1,\e lon1), (0,\e
+!!   lon1), (0,\e lon2), and (\e lat2,\e lon2).
+!! - \e m12, the reduced length of the geodesic is defined such that if
+!!   the initial azimuth is perturbed by \e dazi1 (radians) then the
+!!   second point is displaced by \e m12 \e dazi1 in the direction
+!!   perpendicular to the geodesic.  On a curved surface the reduced
+!!   length obeys a symmetry relation, \e m12 + \e m21 = 0.  On a flat
+!!   surface, we have \e m12 = \e s12.
+!! - \e MM12 and \e MM21 are geodesic scales.  If two geodesics are
+!!   parallel at point 1 and separated by a small distance \e dt, then
+!!   they are separated by a distance \e MM12 \e dt at point 2.  \e MM21
+!!   is defined similarly (with the geodesics being parallel to one
+!!   another at point 2).  On a flat surface, we have \e MM12 = \e MM21
+!!   = 1.
+!! - \e a12 is the arc length on the auxiliary sphere.  This is a
+!!   construct for converting the problem to one in spherical
+!!   trigonometry.  \e a12 is measured in degrees.  The spherical arc
+!!   length from one equator crossing to the next is always 180&deg;.
+!!
+!! If points 1, 2, and 3 lie on a single geodesic, then the following
+!! addition rules hold:
+!! - \e s13 = \e s12 + \e s23
+!! - \e a13 = \e a12 + \e a23
+!! - \e SS13 = \e SS12 + \e SS23
+!! - \e m13 = \e m12 \e MM23 + \e m23 \e MM21
+!! - \e MM13 = \e MM12 \e MM23 &minus; (1 &minus; \e MM12 \e MM21) \e
+!!   m23 / \e m12
+!! - \e MM31 = \e MM32 \e MM21 &minus; (1 &minus; \e MM23 \e MM32) \e
+!!   m12 / \e m23
+!!
+!! The shortest distance returned by the solution of the inverse problem
+!! is (obviously) uniquely defined.  However, in a few special cases
+!! there are multiple azimuths which yield the same shortest distance.
+!! Here is a catalog of those cases:
+!! - \e lat1 = &minus;\e lat2 (with neither at a pole).  If \e azi1 = \e
+!!   azi2, the geodesic is unique.  Otherwise there are two geodesics
+!!   and the second one is obtained by setting [\e azi1, \e azi2] = [\e
+!!   azi2, \e azi1], [\e MM12, \e MM21] = [\e MM21, \e MM12], \e SS12 =
+!!   &minus;\e SS12.  (This occurs when the longitude difference is near
+!!   &plusmn;180&deg; for oblate ellipsoids.)
+!! - \e lon2 = \e lon1 &plusmn; 180&deg; (with neither at a pole).  If
+!!   \e azi1 = 0&deg; or &plusmn;180&deg;, the geodesic is unique.
+!!   Otherwise there are two geodesics and the second one is obtained by
+!!   setting [\e azi1, \e azi2] = [&minus;\e azi1, &minus;\e azi2], \e
+!!   SS12 = &minus;\e SS12.  (This occurs when the \e lat2 is near
+!!   &minus;\e lat1 for prolate ellipsoids.)
+!! - Points 1 and 2 at opposite poles.  There are infinitely many
+!!   geodesics which can be generated by setting [\e azi1, \e azi2] =
+!!   [\e azi1, \e azi2] + [\e d, &minus;\e d], for arbitrary \e d.  (For
+!!   spheres, this prescription applies when points 1 and 2 are
+!!   antipodal.)
+!! - \e s12 = 0 (coincident points).  There are infinitely many
+!!   geodesics which can be generated by setting [\e azi1, \e azi2] =
+!!   [\e azi1, \e azi2] + [\e d, \e d], for arbitrary \e d.
+!!
+!! These routines are a simple transcription of the corresponding C++
+!! classes in <a href="http://geographiclib.sf.net"> GeographicLib</a>.
+!! Because of the limitations of Fortran 77, the classes have been
+!! replaced by simple subroutines with no attempt to save "state" across
+!! subroutine calls.  Most of the internal comments have been retained.
+!! However, in the process of transcription some documentation has been
+!! lost and the documentation for the C++ classes,
+!! GeographicLib::Geodesic, GeographicLib::GeodesicLine, and
+!! GeographicLib::PolygonArea, should be consulted.  The C++ code
+!! remains the "reference implementation".  Think twice about
+!! restructuring the internals of the Fortran code since this may make
+!! porting fixes from the C++ code more difficult.
+!!
+!! Copyright (c) Charles Karney (2012-2013) <charles@karney.com> and
+!! licensed under the MIT/X11 License.  For more information, see
+!! http://geographiclib.sourceforge.net/
+!!
+!! This library was distributed with
+!! <a href="../index.html">GeographicLib</a> 1.31.
+
+!> Solve the direct geodesic problem
+!!
+!! @param[in] a the equatorial radius (meters).
+!! @param[in] f the flattening of the ellipsoid.  Setting \e f = 0 gives
+!!   a sphere.  Negative \e f gives a prolate ellipsoid.
+!! @param[in] lat1 latitude of point 1 (degrees).
+!! @param[in] lon1 longitude of point 1 (degrees).
+!! @param[in] azi1 azimuth at point 1 (degrees).
+!! @param[in] s12a12 if \e arcmod is false, this is the distance between
+!!   point 1 and point 2 (meters); otherwise it is the arc length
+!!   between point 1 and point 2 (degrees); it can be negative.
+!! @param[in] arcmod logical flag determining the meaning of the \e
+!!   s12a12.
+!! @param[out] lat2 latitude of point 2 (degrees).
+!! @param[out] lon2 longitude of point 2 (degrees).
+!! @param[out] azi2 (forward) azimuth at point 2 (degrees).
+!! @param[in] omask a bitor'ed combination of mask values
+!!   specifying which of the following parameters should be set.
+!! @param[out] a12s12 if \e arcmod is false, this is the arc length
+!!   between point 1 and point 2 (degrees); otherwise it is the distance
+!!   between point 1 and point 2 (meters).
+!! @param[out] m12 reduced length of geodesic (meters).
+!! @param[out] MM12 geodesic scale of point 2 relative to point 1
+!!   (dimensionless).
+!! @param[out] MM21 geodesic scale of point 1 relative to point 2
+!!   (dimensionless).
+!! @param[out] SS12 area under the geodesic (meters<sup>2</sup>).
+!!
+!! \e omask is an integer in [0, 16) whose binary bits are interpreted
+!! as follows
+!! - 1 return \e a12
+!! - 2 return \e m12
+!! - 4 return \e MM12 and \e MM21
+!! - 8 return \e SS12
+!!
+!! \e lat1 should be in the range [&minus;90&deg;, 90&deg;]; \e lon1 and
+!! \e azi1 should be in the range [&minus;540&deg;, 540&deg;).  The
+!! values of \e lon2 and \e azi2 returned are in the range
+!! [&minus;180&deg;, 180&deg;).
+!!
+!! If either point is at a pole, the azimuth is defined by keeping the
+!! longitude fixed, writing \e lat = \e lat = &plusmn;(90&deg; &minus;
+!! &epsilon;), and taking the limit &epsilon; &rarr; 0+.  An arc length
+!! greater that 180&deg; signifies a geodesic which is not a shortest
+!! path.  (For a prolate ellipsoid, an additional condition is necessary
+!! for a shortest path: the longitudinal extent must not exceed of
+!! 180&deg;.)
+
+SUBROUTINE DIRECT(a, f, lat1, lon1, azi1, s12a12, arcmod,  &
+    lat2, lon2, azi2, omask, a12s12, m12, mm12, mm21, ss12)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: a
+DOUBLE PRECISION, INTENT(IN)             :: f
+DOUBLE PRECISION, INTENT(IN)             :: lat1
+DOUBLE PRECISION, INTENT(IN OUT)         :: lon1
+DOUBLE PRECISION, INTENT(IN OUT)         :: azi1
+DOUBLE PRECISION, INTENT(IN)             :: s12a12
+LOGICAL, INTENT(IN OUT)                  :: arcmod
+DOUBLE PRECISION, INTENT(OUT)            :: lat2
+DOUBLE PRECISION, INTENT(OUT)            :: lon2
+DOUBLE PRECISION, INTENT(OUT)            :: azi2
+INTEGER, INTENT(IN OUT)                  :: omask
+DOUBLE PRECISION, INTENT(OUT)            :: a12s12
+DOUBLE PRECISION, INTENT(OUT)            :: m12
+DOUBLE PRECISION, INTENT(OUT)            :: mm12
+DOUBLE PRECISION, INTENT(OUT)            :: mm21
+DOUBLE PRECISION, INTENT(OUT)            :: ss12
+
+
+
+! output
+
+! optional output
+
+
+
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc1 = ord
+INTEGER, PARAMETER :: nc1p = ord
+INTEGER, PARAMETER :: nc2 = ord
+INTEGER, PARAMETER :: na3 = ord
+INTEGER, PARAMETER :: na3x = na3
+INTEGER, PARAMETER :: nc3 = ord
+INTEGER, PARAMETER :: nc3x = (nc3 * (nc3 - 1)) / 2
+INTEGER, PARAMETER :: nc4 = ord
+INTEGER, PARAMETER :: nc4x = (nc4 * (nc4 + 1)) / 2
+DOUBLE PRECISION :: a3x(0:na3x-1), c3x(0:nc3x-1), c4x(0:nc4x-1),  &
+    c1a(nc1), c1pa(nc1p), c2a(nc2), c3a(nc3-1), c4a(0:nc4-1)
+
+DOUBLE PRECISION :: csmgt, atanhx, hypotx,  &
+    angnm, angnm2, angrnd, trgsum, a1m1f, a2m1f, a3f
+LOGICAL :: arcp, redlp, scalp, areap
+DOUBLE PRECISION :: e2, f1, ep2, n, b, c2,  &
+    lon1x, azi1x, phi, alp1, salp0, calp0, k2, eps,  &
+    salp1, calp1, ssig1, csig1, cbet1, sbet1, dn1, somg1, comg1,  &
+    salp2, calp2, ssig2, csig2, sbet2, cbet2, dn2, somg2, comg2,  &
+    ssig12, csig12, salp12, calp12, omg12, lam12, lon12,  &
+    sig12, stau1, ctau1, tau12, s12a, t, s, c, serr,  &
+    a1m1, a2m1, a3c, a4, ab1, ab2, b11, b12, b21, b22, b31, b41, b42, j12
+
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+IF (.NOT.init) CALL geoini
+
+e2 = f * (2 - f)
+ep2 = e2 / (1 - e2)
+f1 = 1 - f
+n = f / (2 - f)
+b = a * f1
+c2 = 0
+
+arcp = MOD(omask/1, 2) == 1
+redlp = MOD(omask/2, 2) == 1
+scalp = MOD(omask/4, 2) == 1
+areap = MOD(omask/8, 2) == 1
+
+IF (areap) THEN
+  IF (e2 == 0) THEN
+    c2 = a**2
+  ELSE IF (e2 > 0) THEN
+    c2 = (a**2 + b**2 * atanhx(SQRT(e2)) / SQRT(e2)) / 2
+  ELSE
+    c2 = (a**2 + b**2 * ATAN(SQRT(ABS(e2))) / SQRT(ABS(e2))) / 2
+  END IF
+END IF
+
+CALL a3cof(n, a3x)
+CALL c3cof(n, c3x)
+IF (areap) CALL c4cof(n, c4x)
+
+! Guard against underflow in salp0
+azi1x = angrnd(angnm(azi1))
+lon1x = angnm(lon1)
+
+! alp1 is in [0, pi]
+alp1 = azi1x * degree
+! Enforce sin(pi) == 0 and cos(pi/2) == 0.  Better to face the ensuing
+! problems directly than to skirt them.
+salp1 = csmgt(0D0, SIN(alp1), azi1x == -180)
+calp1 = csmgt(0D0, COS(alp1), ABS(azi1x) == 90)
+
+phi = lat1 * degree
+! Ensure cbet1 = +dbleps at poles
+sbet1 = f1 * SIN(phi)
+cbet1 = csmgt(tiny, COS(phi), ABS(lat1) == 90)
+CALL norm(sbet1, cbet1)
+dn1 = SQRT(1 + ep2 * sbet1**2)
+
+! Evaluate alp0 from sin(alp1) * cos(bet1) = sin(alp0),
+! alp0 in [0, pi/2 - |bet1|]
+salp0 = salp1 * cbet1
+! Alt: calp0 = hypot(sbet1, calp1 * cbet1).  The following
+! is slightly better (consider the case salp1 = 0).
+calp0 = hypotx(calp1, salp1 * sbet1)
+! Evaluate sig with tan(bet1) = tan(sig1) * cos(alp1).
+! sig = 0 is nearest northward crossing of equator.
+! With bet1 = 0, alp1 = pi/2, we have sig1 = 0 (equatorial line).
+! With bet1 =  pi/2, alp1 = -pi, sig1 =  pi/2
+! With bet1 = -pi/2, alp1 =  0 , sig1 = -pi/2
+! Evaluate omg1 with tan(omg1) = sin(alp0) * tan(sig1).
+! With alp0 in (0, pi/2], quadrants for sig and omg coincide.
+! No atan2(0,0) ambiguity at poles since cbet1 = +dbleps.
+! With alp0 = 0, omg1 = 0 for alp1 = 0, omg1 = pi for alp1 = pi.
+ssig1 = sbet1
+somg1 = salp0 * sbet1
+csig1 = csmgt(cbet1 * calp1, 1D0, sbet1 /= 0 .OR. calp1 /= 0)
+comg1 = csig1
+! sig1 in (-pi, pi]
+CALL norm(ssig1, csig1)
+! Geodesic::Norm(somg1, comg1); -- dont need to normalize!
+
+k2 = calp0**2 * ep2
+eps = k2 / (2 * (1 + SQRT(1 + k2)) + k2)
+
+a1m1 = a1m1f(eps)
+CALL c1f(eps, c1a)
+b11 = trgsum(.true., ssig1, csig1, c1a, nc1)
+s = SIN(b11)
+c = COS(b11)
+! tau1 = sig1 + B11
+stau1 = ssig1 * c + csig1 * s
+ctau1 = csig1 * c - ssig1 * s
+! Not necessary because C1pa reverts C1a
+!    B11 = -TrgSum(true, stau1, ctau1, C1pa, nC1p)
+
+IF (.NOT. arcmod) CALL c1pf(eps, c1pa)
+
+IF (redlp .OR. scalp) THEN
+  a2m1 = a2m1f(eps)
+  CALL c2f(eps, c2a)
+  b21 = trgsum(.true., ssig1, csig1, c2a, nc2)
+ELSE
+! Suppress bogus warnings about unitialized variables
+  a2m1 = 0
+  b21 = 0
+END IF
+
+CALL c3f(eps, c3x, c3a)
+a3c = -f * salp0 * a3f(eps, a3x)
+b31 = trgsum(.true., ssig1, csig1, c3a, nc3-1)
+
+IF (areap) THEN
+  CALL c4f(eps, c4x, c4a)
+! Multiplier = a^2 * e^2 * cos(alpha0) * sin(alpha0)
+  a4 = a**2 * calp0 * salp0 * e2
+  b41 = trgsum(.false., ssig1, csig1, c4a, nc4)
+ELSE
+! Suppress bogus warnings about unitialized variables
+  a4 = 0
+  b41 = 0
+END IF
+
+IF (arcmod) THEN
+! Interpret s12a12 as spherical arc length
+  sig12 = s12a12 * degree
+  s12a = ABS(s12a12)
+  s12a = s12a - 180 * AINT(s12a / 180)
+  ssig12 =  csmgt(0D0, SIN(sig12), s12a ==  0)
+  csig12 =  csmgt(0D0, COS(sig12), s12a == 90)
+! Suppress bogus warnings about unitialized variables
+  b12 = 0
+ELSE
+! Interpret s12a12 as distance
+  tau12 = s12a12 / (b * (1 + a1m1))
+  s = SIN(tau12)
+  c = COS(tau12)
+! tau2 = tau1 + tau12
+  b12 = - trgsum(.true.,  &
+      stau1 * c + ctau1 * s, ctau1 * c - stau1 * s, c1pa, nc1p)
+  sig12 = tau12 - (b12 - b11)
+  ssig12 = SIN(sig12)
+  csig12 = COS(sig12)
+  IF (ABS(f) > 0.01D0) THEN
+! Reverted distance series is inaccurate for |f| > 1/100, so correct
+! sig12 with 1 Newton iteration.  The following table shows the
+! approximate maximum error for a = WGS_a() and various f relative to
+! GeodesicExact.
+!     erri = the error in the inverse solution (nm)
+!     errd = the error in the direct solution (series only) (nm)
+!     errda = the error in the direct solution (series + 1 Newton) (nm)
+    
+!       f     erri  errd errda
+!     -1/5    12e6 1.2e9  69e6
+!     -1/10  123e3  12e6 765e3
+!     -1/20   1110 108e3  7155
+!     -1/50  18.63 200.9 27.12
+!     -1/100 18.63 23.78 23.37
+!     -1/150 18.63 21.05 20.26
+!      1/150 22.35 24.73 25.83
+!      1/100 22.35 25.03 25.31
+!      1/50  29.80 231.9 30.44
+!      1/20   5376 146e3  10e3
+!      1/10  829e3  22e6 1.5e6
+!      1/5   157e6 3.8e9 280e6
+    ssig2 = ssig1 * csig12 + csig1 * ssig12
+    csig2 = csig1 * csig12 - ssig1 * ssig12
+    b12 = trgsum(.true., ssig2, csig2, c1a, nc1)
+    serr = (1 + a1m1) * (sig12 + (b12 - b11)) - s12a12 / b
+    sig12 = sig12 - serr / SQRT(1 + k2 * ssig2**2)
+    ssig12 = SIN(sig12)
+    csig12 = COS(sig12)
+! Update B12 below
+  END IF
+END IF
+
+! sig2 = sig1 + sig12
+ssig2 = ssig1 * csig12 + csig1 * ssig12
+csig2 = csig1 * csig12 - ssig1 * ssig12
+dn2 = SQRT(1 + k2 * ssig2**2)
+IF (arcmod .OR. ABS(f) > 0.01D0) b12 = trgsum(.true., ssig2, csig2, c1a, nc1)
+ab1 = (1 + a1m1) * (b12 - b11)
+
+! sin(bet2) = cos(alp0) * sin(sig2)
+sbet2 = calp0 * ssig2
+! Alt: cbet2 = hypot(csig2, salp0 * ssig2)
+cbet2 = hypotx(salp0, calp0 * csig2)
+IF (cbet2 == 0) THEN
+! I.e., salp0 = 0, csig2 = 0.  Break the degeneracy in this case
+  cbet2 = tiny
+  csig2 = cbet2
+END IF
+! tan(omg2) = sin(alp0) * tan(sig2)
+! No need to normalize
+somg2 = salp0 * ssig2
+comg2 = csig2
+! tan(alp0) = cos(sig2)*tan(alp2)
+! No need to normalize
+salp2 = salp0
+calp2 = calp0 * csig2
+! omg12 = omg2 - omg1
+omg12 = ATAN2(somg2 * comg1 - comg2 * somg1, comg2 * comg1 + somg2 * somg1)
+
+lam12 = omg12 + a3c * ( sig12 + (trgsum(.true., ssig2, csig2, c3a, nc3-1)  &
+    - b31))
+lon12 = lam12 / degree
+! Use Math::AngNm2 because longitude might have wrapped multiple
+! times.
+lon12 = angnm2(lon12)
+lon2 = angnm(lon1x + lon12)
+lat2 = ATAN2(sbet2, f1 * cbet2) / degree
+! minus signs give range [-180, 180). 0- converts -0 to +0.
+azi2 = 0 - ATAN2(-salp2, calp2) / degree
+
+IF (redlp .OR. scalp) THEN
+  b22 = trgsum(.true., ssig2, csig2, c2a, nc2)
+  ab2 = (1 + a2m1) * (b22 - b21)
+  j12 = (a1m1 - a2m1) * sig12 + (ab1 - ab2)
+END IF
+! Add parens around (csig1 * ssig2) and (ssig1 * csig2) to ensure
+! accurate cancellation in the case of coincident points.
+IF (redlp) m12 = b * ((dn2 * (csig1 * ssig2) -  &
+    dn1 * (ssig1 * csig2)) - csig1 * csig2 * j12)
+IF (scalp) THEN
+  t = k2 * (ssig2 - ssig1) * (ssig2 + ssig1) / (dn1 + dn2)
+  mm12 = csig12 + (t * ssig2 - csig2 * j12) * ssig1 / dn1
+  mm21 = csig12 - (t * ssig1 - csig1 * j12) * ssig2 / dn2
+END IF
+
+IF (areap) THEN
+  b42 = trgsum(.false., ssig2, csig2, c4a, nc4)
+  IF (calp0 == 0 .OR. salp0 == 0) THEN
+! alp12 = alp2 - alp1, used in atan2 so no need to normalized
+    salp12 = salp2 * calp1 - calp2 * salp1
+    calp12 = calp2 * calp1 + salp2 * salp1
+! The right thing appears to happen if alp1 = +/-180 and alp2 = 0, viz
+! salp12 = -0 and alp12 = -180.  However this depends on the sign being
+! attached to 0 correctly.  The following ensures the correct behavior.
+    IF (salp12 == 0 .AND. calp12 < 0) THEN
+      salp12 = tiny * calp1
+      calp12 = -1
+    END IF
+  ELSE
+! tan(alp) = tan(alp0) * sec(sig)
+! tan(alp2-alp1) = (tan(alp2) -tan(alp1)) / (tan(alp2)*tan(alp1)+1)
+! = calp0 * salp0 * (csig1-csig2) / (salp0^2 + calp0^2 * csig1*csig2)
+! If csig12 > 0, write
+!   csig1 - csig2 = ssig12 * (csig1 * ssig12 / (1 + csig12) + ssig1)
+! else
+!   csig1 - csig2 = csig1 * (1 - csig12) + ssig12 * ssig1
+! No need to normalize
+    salp12 = calp0 * salp0 * csmgt(csig1 * (1 - csig12) + ssig12 * ssig1,  &
+        ssig12 * (csig1 * ssig12 / (1 + csig12) + ssig1), csig12 <= 0)
+    calp12 = salp0**2 + calp0**2 * csig1 * csig2
+  END IF
+  ss12 = c2 * ATAN2(salp12, calp12) + a4 * (b42 - b41)
+END IF
+
+IF (arcp) a12s12 = csmgt(b * ((1 + a1m1) * sig12 + ab1),  &
+    sig12 / degree, arcmod)
+
+RETURN
+END SUBROUTINE DIRECT
+
+!> Solve the inverse geodesic problem.
+!!
+!! @param[in] a the equatorial radius (meters).
+!! @param[in] f the flattening of the ellipsoid.  Setting \e f = 0 gives
+!!   a sphere.  Negative \e f gives a prolate ellipsoid.
+!! @param[in] lat1 latitude of point 1 (degrees).
+!! @param[in] lon1 longitude of point 1 (degrees).
+!! @param[in] lat2 latitude of point 2 (degrees).
+!! @param[in] lon2 longitude of point 2 (degrees).
+!! @param[out] s12 distance between point 1 and point 2 (meters).
+!! @param[out] azi1 azimuth at point 1 (degrees).
+!! @param[out] azi2 (forward) azimuth at point 2 (degrees).
+!! @param[in] omask a bitored combination of mask values
+!!   specifying which of the following parameters should be set.
+!! @param[out] a12 arc length of between point 1 and point 2 (degrees).
+!! @param[out] m12 reduced length of geodesic (meters).
+!! @param[out] MM12 geodesic scale of point 2 relative to point 1
+!!   (dimensionless).
+!! @param[out] MM21 geodesic scale of point 1 relative to point 2
+!!   (dimensionless).
+!! @param[out] SS12 area under the geodesic (meters<sup>2</sup>).
+!!
+!! \e omask is an integer in [0, 16) whose binary bits are interpreted
+!! as follows
+!! - 1 return \e a12
+!! - 2 return \e m12
+!! - 4 return \e MM12 and \e MM21
+!! - 8 return \e SS12
+!!
+!! \e lat1 and \e lat2 should be in the range [&minus;90&deg;, 90&deg;];
+!! \e lon1 and \e lon2 should be in the range [&minus;540&deg;,
+!! 540&deg;).  The values of \e azi1 and \e azi2 returned are in the
+!! range [&minus;180&deg;, 180&deg;).
+!!
+!! If either point is at a pole, the azimuth is defined by keeping the
+!! longitude fixed, writing \e lat = &plusmn;(90&deg; &minus;
+!! &epsilon;), and taking the limit &epsilon; &rarr; 0+.
+!!
+!! The solution to the inverse problem is found using Newton's method.
+!! If this fails to converge (this is very unlikely in geodetic
+!! applications but does occur for very eccentric ellipsoids), then the
+!! bisection method is used to refine the solution.
+
+SUBROUTINE invers(a, f, lat1, lon1, lat2, lon2,  &
+    s12, azi1, azi2, omask, a12, m12, mm12, mm21, ss12)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: a
+DOUBLE PRECISION, INTENT(IN)             :: f
+DOUBLE PRECISION, INTENT(IN OUT)         :: lat1
+DOUBLE PRECISION, INTENT(IN OUT)         :: lon1
+DOUBLE PRECISION, INTENT(IN OUT)         :: lat2
+DOUBLE PRECISION, INTENT(IN OUT)         :: lon2
+DOUBLE PRECISION, INTENT(OUT)            :: s12
+DOUBLE PRECISION, INTENT(OUT)            :: azi1
+DOUBLE PRECISION, INTENT(OUT)            :: azi2
+INTEGER, INTENT(IN OUT)                  :: omask
+DOUBLE PRECISION, INTENT(OUT)            :: a12
+DOUBLE PRECISION, INTENT(OUT)            :: m12
+DOUBLE PRECISION, INTENT(OUT)            :: mm12
+DOUBLE PRECISION, INTENT(OUT)            :: mm21
+DOUBLE PRECISION, INTENT(OUT)            :: ss12
+
+
+! output
+
+! optional output
+
+
+
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc1 = ord
+INTEGER, PARAMETER :: nc2 = ord
+INTEGER, PARAMETER :: na3 = ord
+INTEGER, PARAMETER :: na3x = na3
+INTEGER, PARAMETER :: nc3 = ord
+INTEGER, PARAMETER :: nc3x = (nc3 * (nc3 - 1)) / 2
+INTEGER, PARAMETER :: nc4 = ord
+INTEGER, PARAMETER :: nc4x = (nc4 * (nc4 + 1)) / 2
+DOUBLE PRECISION :: a3x(0:na3x-1), c3x(0:nc3x-1), c4x(0:nc4x-1),  &
+    c1a(nc1), c2a(nc2), c3a(nc3-1), c4a(0:nc4-1)
+
+DOUBLE PRECISION :: csmgt, atanhx, hypotx,  &
+    angnm, angdif, angrnd, trgsum, lam12f, invsta
+INTEGER :: latsgn, lonsgn, swapp, numit
+LOGICAL :: arcp, redlp, scalp, areap, merid, tripn, tripb
+
+DOUBLE PRECISION :: e2, f1, ep2, n, b, c2,  &
+    lat1x, lat2x, phi, salp0, calp0, k2, eps,  &
+    salp1, calp1, ssig1, csig1, cbet1, sbet1, dbet1, dn1,  &
+    salp2, calp2, ssig2, csig2, sbet2, cbet2, dbet2, dn2,  &
+    slam12, clam12, salp12, calp12, omg12, lam12, lon12,  &
+    salp1a, calp1a, salp1b, calp1b,  &
+    dalp1, sdalp1, cdalp1, nsalp1, alp12, somg12, domg12,  &
+    sig12, v, dv, dnm, dummy, a4, b41, b42, s12x, m12x, a12x
+
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+IF (.NOT.init) CALL geoini
+
+f1 = 1 - f
+e2 = f * (2 - f)
+ep2 = e2 / f1**2
+n = f / ( 2 - f)
+b = a * f1
+c2 = 0
+
+arcp = MOD(omask/1, 2) == 1
+redlp = MOD(omask/2, 2) == 1
+scalp = MOD(omask/4, 2) == 1
+areap = MOD(omask/8, 2) == 1
+
+IF (areap) THEN
+  IF (e2 == 0) THEN
+    c2 = a**2
+  ELSE IF (e2 > 0) THEN
+    c2 = (a**2 + b**2 * atanhx(SQRT(e2)) / SQRT(e2)) / 2
+  ELSE
+    c2 = (a**2 + b**2 * ATAN(SQRT(ABS(e2))) / SQRT(ABS(e2))) / 2
+  END IF
+END IF
+
+CALL a3cof(n, a3x)
+CALL c3cof(n, c3x)
+IF (areap) CALL c4cof(n, c4x)
+
+! Compute longitude difference (AngDiff does this carefully).  Result is
+! in [-180, 180] but -180 is only for west-going geodesics.  180 is for
+! east-going and meridional geodesics.
+lon12 = angdif(angnm(lon1), angnm(lon2))
+! If very close to being on the same half-meridian, then make it so.
+lon12 = angrnd(lon12)
+! Make longitude difference positive.
+IF (lon12 >= 0) THEN
+  lonsgn = 1
+ELSE
+  lonsgn = -1
+END IF
+lon12 = lon12 * lonsgn
+! If really close to the equator, treat as on equator.
+lat1x = angrnd(lat1)
+lat2x = angrnd(lat2)
+! Swap points so that point with higher (abs) latitude is point 1
+IF (ABS(lat1x) >= ABS(lat2x)) THEN
+  swapp = 1
+ELSE
+  swapp = -1
+END IF
+IF (swapp < 0) THEN
+  lonsgn = -lonsgn
+  CALL swap(lat1x, lat2x)
+END IF
+! Make lat1 <= 0
+IF (lat1x < 0) THEN
+  latsgn = 1
+ELSE
+  latsgn = -1
+END IF
+lat1x = lat1x * latsgn
+lat2x = lat2x * latsgn
+! Now we have
+
+!     0 <= lon12 <= 180
+!     -90 <= lat1 <= 0
+!     lat1 <= lat2 <= -lat1
+
+! longsign, swapp, latsgn register the transformation to bring the
+! coordinates to this canonical form.  In all cases, 1 means no change
+! was made.  We make these transformations so that there are few cases
+! to check, e.g., on verifying quadrants in atan2.  In addition, this
+! enforces some symmetries in the results returned.
+
+phi = lat1x * degree
+! Ensure cbet1 = +dbleps at poles
+sbet1 = f1 * SIN(phi)
+cbet1 = csmgt(tiny, COS(phi), lat1x == -90)
+CALL norm(sbet1, cbet1)
+
+phi = lat2x * degree
+! Ensure cbet2 = +dbleps at poles
+sbet2 = f1 * SIN(phi)
+cbet2 = csmgt(tiny, COS(phi), ABS(lat2x) == 90)
+CALL norm(sbet2, cbet2)
+
+! If cbet1 < -sbet1, then cbet2 - cbet1 is a sensitive measure of the
+! |bet1| - |bet2|.  Alternatively (cbet1 >= -sbet1), abs(sbet2) + sbet1
+! is a better measure.  This logic is used in assigning calp2 in
+! Lambda12.  Sometimes these quantities vanish and in that case we force
+! bet2 = +/- bet1 exactly.  An example where is is necessary is the
+! inverse problem 48.522876735459 0 -48.52287673545898293
+! 179.599720456223079643 which failed with Visual Studio 10 (Release and
+! Debug)
+
+IF (cbet1 < -sbet1) THEN
+  IF (cbet2 == cbet1) sbet2 = SIGN(sbet1, sbet2)
+ELSE
+  IF (ABS(sbet2) == -sbet1) cbet2 = cbet1
+END IF
+
+dn1 = SQRT(1 + ep2 * sbet1**2)
+dn2 = SQRT(1 + ep2 * sbet2**2)
+
+lam12 = lon12 * degree
+slam12 = SIN(lam12)
+IF (lon12 == 180) slam12 = 0
+! lon12 == 90 isnt interesting
+clam12 = COS(lam12)
+
+! Suppress bogus warnings about unitialized variables
+a12x = 0
+merid = lat1x == -90 .OR. slam12 == 0
+
+IF (merid) THEN
+  
+! Endpoints are on a single full meridian, so the geodesic might lie on
+! a meridian.
+  
+! Head to the target longitude
+  calp1 = clam12
+  salp1 = slam12
+! At the target were heading north
+  calp2 = 1
+  salp2 = 0
+  
+! tan(bet) = tan(sig) * cos(alp)
+  ssig1 = sbet1
+  csig1 = calp1 * cbet1
+  ssig2 = sbet2
+  csig2 = calp2 * cbet2
+  
+! sig12 = sig2 - sig1
+  sig12 = ATAN2(MAX(csig1 * ssig2 - ssig1 * csig2, 0D0),  &
+      csig1 * csig2 + ssig1 * ssig2)
+  CALL lengs(n, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2,  &
+      cbet1, cbet2, s12x, m12x, dummy, scalp, mm12, mm21, ep2, c1a, c2a)
+  
+! Add the check for sig12 since zero length geodesics might yield m12 <
+! 0.  Test case was
+  
+!    echo 20.001 0 20.001 0 | Geod -i
+  
+! In fact, we will have sig12 > pi/2 for meridional geodesic which is
+! not a shortest path.
+  IF (sig12 < 1 .OR. m12x >= 0) THEN
+    m12x = m12x * b
+    s12x = s12x * b
+    a12x = sig12 / degree
+  ELSE
+! m12 < 0, i.e., prolate and too close to anti-podal
+    merid = .false.
+  END IF
+END IF
+
+! Mimic the way Lambda12 works with calp1 = 0
+IF (.NOT. merid .AND. sbet1 == 0 .AND.  &
+      (f <= 0 .OR. lam12 <= pi - f * pi)) THEN
+  
+! Geodesic runs along equator
+  calp1 = 0
+  calp2 = 0
+  salp1 = 1
+  salp2 = 1
+  s12x = a * lam12
+  sig12 = lam12 / f1
+  omg12 = sig12
+  m12x = b * SIN(sig12)
+  IF (scalp) THEN
+    mm12 = COS(sig12)
+    mm21 = mm12
+  END IF
+  a12x = lon12 / f1
+ELSE IF (.NOT. merid) THEN
+! Now point1 and point2 belong within a hemisphere bounded by a
+! meridian and geodesic is neither meridional or equatorial.
+  
+! Figure a starting point for Newton's method
+  sig12 = invsta(sbet1, cbet1, dn1, sbet2, cbet2, dn2, lam12,  &
+      f, a3x, salp1, calp1, salp2, calp2, dnm, c1a, c2a)
+  
+  IF (sig12 >= 0) THEN
+! Short lines (InvSta sets salp2, calp2, dnm)
+    s12x = sig12 * b * dnm
+    m12x = dnm**2 * b * SIN(sig12 / dnm)
+    IF (scalp) THEN
+      mm12 = COS(sig12 / dnm)
+      mm21 = mm12
+    END IF
+    a12x = sig12 / degree
+    omg12 = lam12 / (f1 * dnm)
+  ELSE
+    
+! Newtons method.  This is a straightforward solution of f(alp1) =
+! lambda12(alp1) - lam12 = 0 with one wrinkle.  f(alp) has exactly one
+! root in the interval (0, pi) and its derivative is positive at the
+! root.  Thus f(alp) is positive for alp > alp1 and negative for alp <
+! alp1.  During the course of the iteration, a range (alp1a, alp1b) is
+! maintained which brackets the root and with each evaluation of
+! f(alp) the range is shrunk, if possible.  Newton's method is
+! restarted whenever the derivative of f is negative (because the new
+! value of alp1 is then further from the solution) or if the new
+! estimate of alp1 lies outside (0,pi); in this case, the new starting
+! guess is taken to be (alp1a + alp1b) / 2.
+    
+! Bracketing range
+    salp1a = tiny
+    calp1a = 1
+    salp1b = tiny
+    calp1b = -1
+    tripn = .false.
+    tripb = .false.
+    DO  numit = 0, maxit2-1
+! the WGS84 test set: mean = 1.47, sd = 1.25, max = 16
+! WGS84 and random input: mean = 2.85, sd = 0.60
+      v = lam12f(sbet1, cbet1, dn1, sbet2, cbet2, dn2,  &
+          salp1, calp1, f, a3x, c3x, salp2, calp2, sig12,  &
+          ssig1, csig1, ssig2, csig2, eps, omg12, numit < maxit1, dv,  &
+          c1a, c2a, c3a) - lam12
+! 2 * tol0 is approximately 1 ulp for a number in [0, pi].
+! Reversed test to allow escape with NaNs
+      IF (tripb .OR. .NOT. (ABS(v) >= csmgt(8D0, 2D0, tripn) * tol0))  &
+          EXIT
+! Update bracketing values
+      IF (v > 0 .AND. (numit > maxit1 .OR. calp1/salp1 > calp1b/salp1b)) THEN
+        salp1b = salp1
+        calp1b = calp1
+      ELSE IF (v < 0 .AND. (numit > maxit1 .OR.  &
+            calp1/salp1 < calp1a/salp1a)) THEN
+        salp1a = salp1
+        calp1a = calp1
+      END IF
+      IF (numit < maxit1 .AND. dv > 0) THEN
+        dalp1 = -v/dv
+        sdalp1 = SIN(dalp1)
+        cdalp1 = COS(dalp1)
+        nsalp1 = salp1 * cdalp1 + calp1 * sdalp1
+        IF (nsalp1 > 0 .AND. ABS(dalp1) < pi) THEN
+          calp1 = calp1 * cdalp1 - salp1 * sdalp1
+          salp1 = nsalp1
+          CALL norm(salp1, calp1)
+! In some regimes we dont get quadratic convergence because
+! slope -> 0.  So use convergence conditions based on dbleps
+! instead of sqrt(dbleps).
+          tripn = ABS(v) <= 16 * tol0
+          CYCLE
+        END IF
+      END IF
+! Either dv was not postive or updated value was outside legal
+! range.  Use the midpoint of the bracket as the next estimate.
+! This mechanism is not needed for the WGS84 ellipsoid, but it does
+! catch problems with more eccentric ellipsoids.  Its efficacy is
+! such for the WGS84 test set with the starting guess set to alp1 =
+! 90deg:
+! the WGS84 test set: mean = 5.21, sd = 3.93, max = 24
+! WGS84 and random input: mean = 4.74, sd = 0.99
+      salp1 = (salp1a + salp1b)/2
+      calp1 = (calp1a + calp1b)/2
+      CALL norm(salp1, calp1)
+      tripn = .false.
+      tripb = ABS(salp1a - salp1) + (calp1a - calp1) < tolb  &
+          .OR. ABS(salp1 - salp1b) + (calp1 - calp1b) < tolb
+    END DO
+    20       CONTINUE
+    CALL lengs(eps, sig12, ssig1, csig1, dn1,  &
+        ssig2, csig2, dn2, cbet1, cbet2, s12x, m12x, dummy,  &
+        scalp, mm12, mm21, ep2, c1a, c2a)
+    m12x = m12x * b
+    s12x = s12x * b
+    a12x = sig12 / degree
+    omg12 = lam12 - omg12
+  END IF
+END IF
+
+! Convert -0 to 0
+s12 = 0 + s12x
+IF (redlp) m12 = 0 + m12x
+
+IF (areap) THEN
+! From Lambda12: sin(alp1) * cos(bet1) = sin(alp0)
+  salp0 = salp1 * cbet1
+  calp0 = hypotx(calp1, salp1 * sbet1)
+  IF (calp0 /= 0 .AND. salp0 /= 0) THEN
+! From Lambda12: tan(bet) = tan(sig) * cos(alp)
+    ssig1 = sbet1
+    csig1 = calp1 * cbet1
+    ssig2 = sbet2
+    csig2 = calp2 * cbet2
+    k2 = calp0**2 * ep2
+    eps = k2 / (2 * (1 + SQRT(1 + k2)) + k2)
+! Multiplier = a^2 * e^2 * cos(alpha0) * sin(alpha0).
+    a4 = a**2 * calp0 * salp0 * e2
+    CALL norm(ssig1, csig1)
+    CALL norm(ssig2, csig2)
+    CALL c4f(eps, c4x, c4a)
+    b41 = trgsum(.false., ssig1, csig1, c4a, nc4)
+    b42 = trgsum(.false., ssig2, csig2, c4a, nc4)
+    ss12 = a4 * (b42 - b41)
+  ELSE
+! Avoid problems with indeterminate sig1, sig2 on equator
+    ss12 = 0
+  END IF
+  
+  IF (.NOT. merid .AND. omg12 < 0.75D0 * pi  &
+        .AND. sbet2 - sbet1 < 1.75D0) THEN
+! Use tan(Gamma/2) = tan(omg12/2)
+! * (tan(bet1/2)+tan(bet2/2))/(1+tan(bet1/2)*tan(bet2/2))
+! with tan(x/2) = sin(x)/(1+cos(x))
+    somg12 = SIN(omg12)
+    domg12 = 1 + COS(omg12)
+    dbet1 = 1 + cbet1
+    dbet2 = 1 + cbet2
+    alp12 = 2 * ATAN2(somg12 * (sbet1 * dbet2 + sbet2 * dbet1),  &
+        domg12 * ( sbet1 * sbet2 + dbet1 * dbet2 ) )
+  ELSE
+! alp12 = alp2 - alp1, used in atan2 so no need to normalize
+    salp12 = salp2 * calp1 - calp2 * salp1
+    calp12 = calp2 * calp1 + salp2 * salp1
+! The right thing appears to happen if alp1 = +/-180 and alp2 = 0, viz
+! salp12 = -0 and alp12 = -180.  However this depends on the sign
+! being attached to 0 correctly.  The following ensures the correct
+! behavior.
+    IF (salp12 == 0 .AND. calp12 < 0) THEN
+      salp12 = tiny * calp1
+      calp12 = -1
+    END IF
+    alp12 = ATAN2(salp12, calp12)
+  END IF
+  ss12 = ss12 + c2 * alp12
+  ss12 = ss12 * swapp * lonsgn * latsgn
+! Convert -0 to 0
+  ss12 = 0 + ss12
+END IF
+
+! Convert calp, salp to azimuth accounting for lonsgn, swapp, latsgn.
+IF (swapp < 0) THEN
+  CALL swap(salp1, salp2)
+  CALL swap(calp1, calp2)
+  IF (scalp) CALL swap(mm12, mm21)
+END IF
+
+salp1 = salp1 * swapp * lonsgn
+calp1 = calp1 * swapp * latsgn
+salp2 = salp2 * swapp * lonsgn
+calp2 = calp2 * swapp * latsgn
+
+! minus signs give range [-180, 180). 0- converts -0 to +0.
+azi1 = 0 - ATAN2(-salp1, calp1) / degree
+azi2 = 0 - ATAN2(-salp2, calp2) / degree
+
+IF (arcp) a12 = a12x
+
+RETURN
+END SUBROUTINE invers
+
+!> Determine the area of a geodesic polygon
+!!
+!! @param[in] a the equatorial radius (meters).
+!! @param[in] f the flattening of the ellipsoid.  Setting \e f = 0 gives
+!!   a sphere.  Negative \e f gives a prolate ellipsoid.
+!! @param[in] lats an array of the latitudes of the vertices (degrees).
+!! @param[in] lons an array of the longitudes of the vertices (degrees).
+!! @param[in] n the number of vertices
+!! @param[out] AA the (signed) area of the polygon (meters<sup>2</sup>)
+!! @param[out] PP the perimeter of the polygon
+!!
+!! \e lats should be in the range [&minus;90&deg;, 90&deg;]; \e lons
+!! should be in the range [&minus;540&deg;, 540&deg;).
+!!
+!! Only simple polygons (which are not self-intersecting) are allowed.
+!! There's no need to "close" the polygon by repeating the first vertex.
+!! The area returned is signed with counter-clockwise traversal being
+!! treated as positive.
+
+SUBROUTINE area(a, f, lats, lons, n, aa, pp)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: a
+DOUBLE PRECISION, INTENT(IN)             :: f
+DOUBLE PRECISION, INTENT(IN OUT)         :: lats(n)
+DOUBLE PRECISION, INTENT(IN)             :: lons(n)
+INTEGER, INTENT(IN)                      :: n
+DOUBLE PRECISION, INTENT(OUT)            :: aa
+DOUBLE PRECISION, INTENT(OUT)            :: pp
+
+
+! output
+
+
+INTEGER :: i, omask, cross, trnsit
+DOUBLE PRECISION :: s12, azi1, azi2, dummy, ss12, b, e2, c2, area0,  &
+    atanhx, aacc(2), pacc(2)
+
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+omask = 8
+CALL accini(aacc)
+CALL accini(pacc)
+cross = 0
+DO  i = 0, n-1
+  CALL invers(a, f, lats(i+1), lons(i+1),  &
+      lats(MOD(i+1,n)+1), lons(MOD(i+1,n)+1),  &
+      s12, azi1, azi2, omask, dummy, dummy, dummy, dummy, ss12)
+  CALL accadd(pacc, s12)
+  CALL accadd(aacc, -ss12)
+  cross = cross + trnsit(lons(i+1), lons(MOD(i+1,n)+1))
+END DO
+pp = pacc(1)
+b = a * (1 - f)
+e2 = f * (2 - f)
+IF (e2 == 0) THEN
+  c2 = a**2
+ELSE IF (e2 > 0) THEN
+  c2 = (a**2 + b**2 * atanhx(SQRT(e2)) / SQRT(e2)) / 2
+ELSE
+  c2 = (a**2 + b**2 * ATAN(SQRT(ABS(e2))) / SQRT(ABS(e2))) / 2
+END IF
+area0 = 4 * pi * c2
+IF (MOD(ABS(cross), 2) == 1) THEN
+  IF (aacc(1) < 0) THEN
+    CALL accadd(aacc, +area0/2)
+  ELSE
+    CALL accadd(aacc, -area0/2)
+  END IF
+END IF
+IF (aacc(1) > area0/2) THEN
+  CALL accadd(aacc, -area0)
+ELSE IF (aacc(1) <= -area0/2) THEN
+  CALL accadd(aacc, +area0)
+END IF
+aa = aacc(1)
+
+RETURN
+END SUBROUTINE area
+
+!> @cond SKIP
+
+BLOCK DATA geodat
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+DATA init /.false./
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+END
+
+SUBROUTINE geoini
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+digits = 53
+dblmin = 0.5D0**1022
+dbleps = 0.5D0**(digits-1)
+
+pi = ATAN2(0.0D0, -1.0D0)
+degree = pi/180
+tiny = SQRT(dblmin)
+tol0 = dbleps
+! Increase multiplier in defn of tol1 from 100 to 200 to fix inverse
+! case 52.784459512564 0 -52.784459512563990912 179.634407464943777557
+! which otherwise failed for Visual Studio 10 (Release and Debug)
+tol1 = 200 * tol0
+tol2 = SQRT(tol0)
+! Check on bisection interval
+tolb = tol0 * tol2
+xthrsh = 1000 * tol2
+maxit1 = 20
+maxit2 = maxit1 + digits + 10
+
+init = .true.
+
+RETURN
+END SUBROUTINE geoini
+
+SUBROUTINE lengs(eps, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2,  &
+    cbet1, cbet2, s12b, m12b, m0, scalp, mm12, mm21, ep2, c1a, c2a)
+! input
+
+DOUBLE PRECISION, INTENT(IN OUT)         :: eps
+DOUBLE PRECISION, INTENT(IN)             :: sig12
+DOUBLE PRECISION, INTENT(IN)             :: ssig1
+DOUBLE PRECISION, INTENT(IN)             :: csig1
+DOUBLE PRECISION, INTENT(IN)             :: dn1
+DOUBLE PRECISION, INTENT(IN)             :: ssig2
+DOUBLE PRECISION, INTENT(IN)             :: csig2
+DOUBLE PRECISION, INTENT(IN)             :: dn2
+DOUBLE PRECISION, INTENT(IN OUT)         :: cbet1
+DOUBLE PRECISION, INTENT(IN OUT)         :: cbet2
+DOUBLE PRECISION, INTENT(OUT)            :: s12b
+DOUBLE PRECISION, INTENT(OUT)            :: m12b
+DOUBLE PRECISION, INTENT(OUT)            :: m0
+LOGICAL, INTENT(IN OUT)                  :: scalp
+DOUBLE PRECISION, INTENT(OUT)            :: mm12
+DOUBLE PRECISION, INTENT(OUT)            :: mm21
+DOUBLE PRECISION, INTENT(IN)             :: ep2
+DOUBLE PRECISION, INTENT(IN)             :: c1a(*)
+DOUBLE PRECISION, INTENT(IN)             :: c2a(*)
+
+
+! output
+
+! optional output
+
+! temporary storage
+
+
+
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc1 = ord
+INTEGER, PARAMETER :: nc2 = ord
+
+DOUBLE PRECISION :: a1m1f, a2m1f, trgsum
+DOUBLE PRECISION :: a1m1, ab1, a2m1, ab2, j12, csig12, t
+
+! Return m12b = (reduced length)/b; also calculate s12b = distance/b,
+! and m0 = coefficient of secular term in expression for reduced length.
+CALL c1f(eps, c1a)
+CALL c2f(eps, c2a)
+
+a1m1 = a1m1f(eps)
+ab1 = (1 + a1m1) * (trgsum(.true., ssig2, csig2, c1a, nc1) -  &
+    trgsum(.true., ssig1, csig1, c1a, nc1))
+a2m1 = a2m1f(eps)
+ab2 = (1 + a2m1) * (trgsum(.true., ssig2, csig2, c2a, nc2) -  &
+    trgsum(.true., ssig1, csig1, c2a, nc2))
+m0 = a1m1 - a2m1
+j12 = m0 * sig12 + (ab1 - ab2)
+! Missing a factor of b.
+! Add parens around (csig1 * ssig2) and (ssig1 * csig2) to ensure
+! accurate cancellation in the case of coincident points.
+m12b = dn2 * (csig1 * ssig2) - dn1 * (ssig1 * csig2) - csig1 * csig2 * j12
+! Missing a factor of b
+s12b = (1 + a1m1) * sig12 + ab1
+IF (scalp) THEN
+  csig12 = csig1 * csig2 + ssig1 * ssig2
+  t = ep2 * (cbet1 - cbet2) * (cbet1 + cbet2) / (dn1 + dn2)
+  mm12 = csig12 + (t * ssig2 - csig2 * j12) * ssig1 / dn1
+  mm21 = csig12 - (t * ssig1 - csig1 * j12) * ssig2 / dn2
+END IF
+
+RETURN
+END SUBROUTINE lengs
+
+DOUBLE PRECISION FUNCTION astrd(x, y)
+! Solve k^4+2*k^3-(x^2+y^2-1)*k^2-2*y^2*k-y^2 = 0 for positive root k.
+! This solution is adapted from Geocentric::Reverse.
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: x
+DOUBLE PRECISION, INTENT(IN)             :: y
+
+
+DOUBLE PRECISION :: cbrt, csmgt
+DOUBLE PRECISION :: k, p, q, r, s, r2, r3, disc, u, t3, t, ang, v, uv, w
+
+p = x**2
+q = y**2
+r = (p + q - 1) / 6
+IF ( .NOT. (q == 0 .AND. r < 0) ) THEN
+! Avoid possible division by zero when r = 0 by multiplying equations
+! for s and t by r^3 and r, resp.
+! S = r^3 * s
+  s = p * q / 4
+  r2 = r**2
+  r3 = r * r2
+! The discrimant of the quadratic equation for T3.  This is zero on
+! the evolute curve p^(1/3)+q^(1/3) = 1
+  disc = s * (s + 2 * r3)
+  u = r
+  IF (disc >= 0) THEN
+    t3 = s + r3
+! Pick the sign on the sqrt to maximize abs(T3).  This minimizes loss
+! of precision due to cancellation.  The result is unchanged because
+! of the way the T is used in definition of u.
+! T3 = (r * t)^3
+    t3 = t3 + csmgt(-SQRT(disc), SQRT(disc), t3 < 0)
+! N.B. cbrt always returns the real root.  cbrt(-8) = -2.
+! T = r * t
+    t = cbrt(t3)
+! T can be zero; but then r2 / T -> 0.
+    IF (t /= 0) u = u + t + r2 / t
+  ELSE
+! T is complex, but the way u is defined the result is real.
+    ang = ATAN2(SQRT(-disc), -(s + r3))
+! There are three possible cube roots.  We choose the root which
+! avoids cancellation.  Note that disc < 0 implies that r < 0.
+    u = u + 2 * r * COS(ang / 3)
+  END IF
+! guaranteed positive
+  v = SQRT(u**2 + q)
+! Avoid loss of accuracy when u < 0.
+! u+v, guaranteed positive
+  uv = csmgt(q / (v - u), u + v, u < 0)
+! positive?
+  w = (uv - q) / (2 * v)
+! Rearrange expression for k to avoid loss of accuracy due to
+! subtraction.  Division by 0 not possible because uv > 0, w >= 0.
+! guaranteed positive
+  k = uv / (SQRT(uv + w**2) + w)
+ELSE
+! q == 0 && r <= 0
+! y = 0 with |x| <= 1.  Handle this case directly.
+! for y small, positive root is k = abs(y)/sqrt(1-x^2)
+  k = 0
+END IF
+astrd = k
+
+RETURN
+END FUNCTION astrd
+
+DOUBLE PRECISION FUNCTION invsta(sbet1, cbet1, dn1,  &
+    sbet2, cbet2, dn2, lam12, f, a3x, salp1, calp1, salp2, calp2, dnm,  &
+    c1a, c2a)
+! Return a starting point for Newton's method in salp1 and calp1
+! (function value is -1).  If Newton's method doesn't need to be used,
+! return also salp2, calp2, and dnm and function value is sig12.
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: sbet1
+DOUBLE PRECISION, INTENT(IN)             :: cbet1
+DOUBLE PRECISION, INTENT(IN OUT)         :: dn1
+DOUBLE PRECISION, INTENT(IN)             :: sbet2
+DOUBLE PRECISION, INTENT(IN)             :: cbet2
+DOUBLE PRECISION, INTENT(IN OUT)         :: dn2
+DOUBLE PRECISION, INTENT(IN)             :: lam12
+DOUBLE PRECISION, INTENT(IN)             :: f
+DOUBLE PRECISION, INTENT(IN OUT)         :: a3x(*)
+DOUBLE PRECISION, INTENT(OUT)            :: salp1
+DOUBLE PRECISION, INTENT(OUT)            :: calp1
+DOUBLE PRECISION, INTENT(OUT)            :: salp2
+DOUBLE PRECISION, INTENT(OUT)            :: calp2
+DOUBLE PRECISION, INTENT(OUT)            :: dnm
+DOUBLE PRECISION, INTENT(IN OUT)         :: c1a(*)
+DOUBLE PRECISION, INTENT(IN OUT)         :: c2a(*)
+
+! output
+
+! temporary
+
+
+DOUBLE PRECISION :: csmgt, hypotx, a3f, astrd
+LOGICAL :: shortp
+DOUBLE PRECISION :: f1, e2, ep2, n, etol2, k2, eps, sig12,  &
+    sbet12, cbet12, sbt12a, omg12, somg12, comg12, ssig12, csig12,  &
+    x, y, lamscl, betscl, cbt12a, bt12a, m12b, m0, dummy, k, omg12a, sbetm2
+
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+f1 = 1 - f
+e2 = f * (2 - f)
+ep2 = e2 / (1 - e2)
+n = f / (2 - f)
+! The sig12 threshold for "really short".  Using the auxiliary sphere
+! solution with dnm computed at (bet1 + bet2) / 2, the relative error in
+! the azimuth consistency check is sig12^2 * abs(f) * min(1, 1-f/2) / 2.
+! (Error measured for 1/100 < b/a < 100 and abs(f) >= 1/1000.  For a
+! given f and sig12, the max error occurs for lines near the pole.  If
+! the old rule for computing dnm = (dn1 + dn2)/2 is used, then the error
+! increases by a factor of 2.)  Setting this equal to epsilon gives
+! sig12 = etol2.  Here 0.1 is a safety factor (error decreased by 100)
+! and max(0.001, abs(f)) stops etol2 getting too large in the nearly
+! spherical case.
+etol2 = 0.1D0 * tol2 / SQRT( MAX(0.001D0, ABS(f)) * MIN(1D0, 1 - f/2) / 2 )
+
+! Return value
+sig12 = -1
+! bet12 = bet2 - bet1 in [0, pi); bt12a = bet2 + bet1 in (-pi, 0]
+sbet12 = sbet2 * cbet1 - cbet2 * sbet1
+cbet12 = cbet2 * cbet1 + sbet2 * sbet1
+sbt12a = sbet2 * cbet1 + cbet2 * sbet1
+
+shortp = cbet12 >= 0 .AND. sbet12 < 0.5D0 .AND. cbet2 * lam12 < 0.5D0
+
+omg12 = lam12
+IF (shortp) THEN
+  sbetm2 = (sbet1 + sbet2)**2
+! sin((bet1+bet2)/2)^2
+!  =  (sbet1 + sbet2)^2 / ((sbet1 + sbet2)^2 + (cbet1 + cbet2)^2)
+  sbetm2 = sbetm2 / (sbetm2 + (cbet1 + cbet2)**2)
+  dnm = SQRT(1 + ep2 * sbetm2)
+  omg12 = omg12 / (f1 * dnm)
+END IF
+somg12 = SIN(omg12)
+comg12 = COS(omg12)
+
+salp1 = cbet2 * somg12
+calp1 = csmgt(sbet12 + cbet2 * sbet1 * somg12**2 / (1 + comg12),  &
+    sbt12a - cbet2 * sbet1 * somg12**2 / (1 - comg12), comg12 >= 0)
+
+ssig12 = hypotx(salp1, calp1)
+csig12 = sbet1 * sbet2 + cbet1 * cbet2 * comg12
+
+IF (shortp .AND. ssig12 < etol2) THEN
+! really short lines
+  salp2 = cbet1 * somg12
+  calp2 = sbet12 - cbet1 * sbet2 *  &
+      csmgt(somg12**2 / (1 + comg12), 1 - comg12, comg12 >= 0)
+  CALL norm(salp2, calp2)
+! Set return value
+  sig12 = ATAN2(ssig12, csig12)
+ELSE IF (ABS(n) > 0.1D0 .OR. csig12 >= 0 .OR.  &
+      ssig12 >= 6 * ABS(n) * pi * cbet1**2) THEN
+! Nothing to do, zeroth order spherical approximation is OK
+  CONTINUE
+ELSE
+! Scale lam12 and bet2 to x, y coordinate system where antipodal point
+! is at origin and singular point is at y = 0, x = -1.
+  IF (f >= 0) THEN
+! x = dlong, y = dlat
+    k2 = sbet1**2 * ep2
+    eps = k2 / (2 * (1 + SQRT(1 + k2)) + k2)
+    lamscl = f * cbet1 * a3f(eps, a3x) * pi
+    betscl = lamscl * cbet1
+    x = (lam12 - pi) / lamscl
+    y = sbt12a / betscl
+  ELSE
+! f < 0: x = dlat, y = dlong
+    cbt12a = cbet2 * cbet1 - sbet2 * sbet1
+    bt12a = ATAN2(sbt12a, cbt12a)
+! In the case of lon12 = 180, this repeats a calculation made in
+! Inverse.
+    CALL lengs(n, pi + bt12a, sbet1, -cbet1, dn1, sbet2, cbet2, dn2,  &
+        cbet1, cbet2, dummy, m12b, m0, .false., dummy, dummy, ep2, c1a, c2a)
+    x = -1 + m12b / (cbet1 * cbet2 * m0 * pi)
+    betscl = csmgt(sbt12a / x, -f * cbet1**2 * pi, x < -0.01D0)
+    lamscl = betscl / cbet1
+    y = (lam12 - pi) / lamscl
+  END IF
+  
+  IF (y > -tol1 .AND. x > -1 - xthrsh) THEN
+! strip near cut
+    IF (f >= 0) THEN
+      salp1 = MIN(1D0, -x)
+      calp1 = - SQRT(1 - salp1**2)
+    ELSE
+      calp1 = MAX(csmgt(0D0, 1D0, x > -tol1), x)
+      salp1 = SQRT(1 - calp1**2)
+    END IF
+  ELSE
+! Estimate alp1, by solving the astroid problem.
+    
+! Could estimate alpha1 = theta + pi/2, directly, i.e.,
+!   calp1 = y/k; salp1 = -x/(1+k);  for f >= 0
+!   calp1 = x/(1+k); salp1 = -y/k;  for f < 0 (need to check)
+    
+! However, it's better to estimate omg12 from astroid and use
+! spherical formula to compute alp1.  This reduces the mean number of
+! Newton iterations for astroid cases from 2.24 (min 0, max 6) to 2.12
+! (min 0 max 5).  The changes in the number of iterations are as
+! follows:
+    
+! change percent
+!    1       5
+!    0      78
+!   -1      16
+!   -2       0.6
+!   -3       0.04
+!   -4       0.002
+    
+! The histogram of iterations is (m = number of iterations estimating
+! alp1 directly, n = number of iterations estimating via omg12, total
+! number of trials = 148605):
+    
+!  iter    m      n
+!    0   148    186
+!    1 13046  13845
+!    2 93315 102225
+!    3 36189  32341
+!    4  5396      7
+!    5   455      1
+!    6    56      0
+    
+! Because omg12 is near pi, estimate work with omg12a = pi - omg12
+    k = astrd(x, y)
+    omg12a = lamscl * csmgt(-x * k/(1 + k), -y * (1 + k)/k, f >= 0)
+    somg12 = SIN(omg12a)
+    comg12 = -COS(omg12a)
+! Update spherical estimate of alp1 using omg12 instead of lam12
+    salp1 = cbet2 * somg12
+    calp1 = sbt12a - cbet2 * sbet1 * somg12**2 / (1 - comg12)
+  END IF
+END IF
+! Sanity check on starting guess
+IF (salp1 > 0) THEN
+  CALL norm(salp1, calp1)
+ELSE
+  salp1 = 1
+  calp1 = 0
+END IF
+invsta = sig12
+
+RETURN
+END FUNCTION invsta
+
+DOUBLE PRECISION FUNCTION lam12f(sbet1, cbet1, dn1,  &
+    sbet2, cbet2, dn2, salp1, calp1, f, a3x, c3x, salp2, calp2,  &
+    sig12, ssig1, csig1, ssig2, csig2, eps, domg12, diffp, dlam12, c1a, c2a, c3a)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: sbet1
+DOUBLE PRECISION, INTENT(IN)             :: cbet1
+DOUBLE PRECISION, INTENT(IN)             :: dn1
+DOUBLE PRECISION, INTENT(IN)             :: sbet2
+DOUBLE PRECISION, INTENT(IN)             :: cbet2
+DOUBLE PRECISION, INTENT(IN OUT)         :: dn2
+DOUBLE PRECISION, INTENT(IN)             :: salp1
+DOUBLE PRECISION, INTENT(IN OUT)         :: calp1
+DOUBLE PRECISION, INTENT(IN)             :: f
+DOUBLE PRECISION, INTENT(IN OUT)         :: a3x(*)
+DOUBLE PRECISION, INTENT(IN OUT)         :: c3x(*)
+DOUBLE PRECISION, INTENT(IN OUT)         :: salp2
+DOUBLE PRECISION, INTENT(OUT)            :: calp2
+DOUBLE PRECISION, INTENT(OUT)            :: sig12
+DOUBLE PRECISION, INTENT(OUT)            :: ssig1
+DOUBLE PRECISION, INTENT(OUT)            :: csig1
+DOUBLE PRECISION, INTENT(OUT)            :: ssig2
+DOUBLE PRECISION, INTENT(OUT)            :: csig2
+DOUBLE PRECISION, INTENT(OUT)            :: eps
+DOUBLE PRECISION, INTENT(OUT)            :: domg12
+LOGICAL, INTENT(IN OUT)                  :: diffp
+DOUBLE PRECISION, INTENT(OUT)            :: dlam12
+DOUBLE PRECISION, INTENT(IN OUT)         :: c1a(*)
+DOUBLE PRECISION, INTENT(IN OUT)         :: c2a(*)
+DOUBLE PRECISION, INTENT(IN)             :: c3a(*)
+
+
+! output
+
+! optional output
+
+! temporary
+
+
+
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc3 = ord
+
+DOUBLE PRECISION :: csmgt, hypotx, a3f, trgsum
+
+DOUBLE PRECISION :: f1, e2, ep2, salp0, calp0,  &
+    somg1, comg1, somg2, comg2, omg12, lam12, b312, h0, k2, dummy
+
+DOUBLE PRECISION :: dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh
+INTEGER :: digits, maxit1, maxit2
+LOGICAL :: init
+COMMON /geocom/ dblmin, dbleps, pi, degree, tiny,  &
+    tol0, tol1, tol2, tolb, xthrsh, digits, maxit1, maxit2, init
+
+f1 = 1 - f
+e2 = f * (2 - f)
+ep2 = e2 / (1 - e2)
+! Break degeneracy of equatorial line.  This case has already been
+! handled.
+IF (sbet1 == 0 .AND. calp1 == 0) calp1 = -tiny
+
+! sin(alp1) * cos(bet1) = sin(alp0)
+salp0 = salp1 * cbet1
+! calp0 > 0
+calp0 = hypotx(calp1, salp1 * sbet1)
+
+! tan(bet1) = tan(sig1) * cos(alp1)
+! tan(omg1) = sin(alp0) * tan(sig1) = tan(omg1)=tan(alp1)*sin(bet1)
+ssig1 = sbet1
+somg1 = salp0 * sbet1
+csig1 = calp1 * cbet1
+comg1 = csig1
+CALL norm(ssig1, csig1)
+! Norm(somg1, comg1); -- don't need to normalize!
+
+! Enforce symmetries in the case abs(bet2) = -bet1.  Need to be careful
+! about this case, since this can yield singularities in the Newton
+! iteration.
+! sin(alp2) * cos(bet2) = sin(alp0)
+salp2 = csmgt(salp0 / cbet2, salp1, cbet2 /= cbet1)
+! calp2 = sqrt(1 - sq(salp2))
+!       = sqrt(sq(calp0) - sq(sbet2)) / cbet2
+! and subst for calp0 and rearrange to give (choose positive sqrt
+! to give alp2 in [0, pi/2]).
+calp2 = csmgt(SQRT((calp1 * cbet1)**2 +  &
+    csmgt((cbet2 - cbet1) * (cbet1 + cbet2), (sbet1 - sbet2) * (sbet1 + sbet2),  &
+    cbet1 < -sbet1)) / cbet2,  &
+    ABS(calp1), cbet2 /= cbet1 .OR. ABS(sbet2) /= -sbet1)
+! tan(bet2) = tan(sig2) * cos(alp2)
+! tan(omg2) = sin(alp0) * tan(sig2).
+ssig2 = sbet2
+somg2 = salp0 * sbet2
+csig2 = calp2 * cbet2
+comg2 = csig2
+CALL norm(ssig2, csig2)
+! Norm(somg2, comg2); -- don't need to normalize!
+
+! sig12 = sig2 - sig1, limit to [0, pi]
+sig12 = ATAN2(MAX(csig1 * ssig2 - ssig1 * csig2, 0D0),  &
+    csig1 * csig2 + ssig1 * ssig2)
+
+! omg12 = omg2 - omg1, limit to [0, pi]
+omg12 = ATAN2(MAX(comg1 * somg2 - somg1 * comg2, 0D0),  &
+    comg1 * comg2 + somg1 * somg2)
+k2 = calp0**2 * ep2
+eps = k2 / (2 * (1 + SQRT(1 + k2)) + k2)
+CALL c3f(eps, c3x, c3a)
+b312 = (trgsum(.true., ssig2, csig2, c3a, nc3-1) -  &
+    trgsum(.true., ssig1, csig1, c3a, nc3-1))
+h0 = -f * a3f(eps, a3x)
+domg12 = salp0 * h0 * (sig12 + b312)
+lam12 = omg12 + domg12
+
+IF (diffp) THEN
+  IF (calp2 == 0) THEN
+    dlam12 = - 2 * f1 * dn1 / sbet1
+  ELSE
+    CALL lengs(eps, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2,  &
+        cbet1, cbet2, dummy, dlam12, dummy, .false., dummy, dummy, ep2, c1a, c2a)
+    dlam12 = dlam12 * f1 / (calp2 * cbet2)
+  END IF
+END IF
+lam12f = lam12
+
+RETURN
+END FUNCTION lam12f
+
+DOUBLE PRECISION FUNCTION a3f(eps, a3x)
+! Evaluate sum(A3x[k] * eps^k, k, 0, nA3x-1) by Horner's method
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(IN)             :: a3x(0: -1)
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: na3 = ord
+INTEGER  ::   na3x = nA3
+
+! input
+
+! output
+
+
+INTEGER :: i
+
+a3f = 0
+DO  i = na3x-1, 0, -1
+  a3f = eps * a3f + a3x(i)
+END DO
+
+RETURN
+END FUNCTION a3f
+
+SUBROUTINE c3f(eps, c3x, c)
+! Evaluate C3 coeffs by Horner's method
+! Elements c[1] thru c[nC3-1] are set
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc3 = ord
+INTEGER, PARAMETER :: nc3x = (nc3 * (nc3 - 1)) / 2
+
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(IN)             :: c3x(0:nc3x-1)
+DOUBLE PRECISION, INTENT(OUT)            :: c(nc3-1)
+
+! input
+
+! output
+
+
+INTEGER :: i, j, k
+DOUBLE PRECISION :: t, mult
+
+j = nc3x
+DO  k = nc3-1, 1 , -1
+  t = 0
+  DO  i = nc3 - k, 1, -1
+    j = j - 1
+    t = eps * t + c3x(j)
+  END DO
+  c(k) = t
+END DO
+
+mult = 1
+DO  k = 1, nc3-1
+  mult = mult * eps
+  c(k) = c(k) * mult
+END DO
+
+RETURN
+END SUBROUTINE c3f
+
+SUBROUTINE c4f(eps, c4x, c)
+! Evaluate C4 coeffs by Horner's method
+! Elements c[0] thru c[nC4-1] are set
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc4 = ord
+INTEGER, PARAMETER :: nc4x = (nc4 * (nc4 + 1)) / 2
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(IN)             :: c4x(0:nc4x-1)
+DOUBLE PRECISION, INTENT(OUT)            :: c(0:nc4-1)
+
+
+! input
+
+!output
+
+
+INTEGER :: i, j, k
+DOUBLE PRECISION :: t, mult
+
+j = nc4x
+DO  k = nc4-1, 0, -1
+  t = 0
+  DO  i = nc4 - k, 1, -1
+    j = j - 1
+    t = eps * t + c4x(j)
+  END DO
+  c(k) = t
+END DO
+
+mult = 1
+DO  k = 1, nc4-1
+  mult = mult * eps
+  c(k) = c(k) * mult
+END DO
+
+RETURN
+END SUBROUTINE c4f
+
+! Generated by Maxima on 2010-09-04 10:26:17-04:00
+
+DOUBLE PRECISION FUNCTION a1m1f(eps)
+! The scale factor A1-1 = mean value of (d/dsigma)I1 - 1
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+
+
+DOUBLE PRECISION :: eps2, t
+
+eps2 = eps**2
+t = eps2*(eps2*(eps2+4)+64)/256
+a1m1f = (t + eps) / (1 - eps)
+
+RETURN
+END FUNCTION a1m1f
+
+SUBROUTINE c1f(eps, c)
+! The coefficients C1[l] in the Fourier expansion of B1
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc1 = ord
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(OUT)            :: c(nc1)
+
+
+! input
+
+! output
+
+
+DOUBLE PRECISION :: eps2, d
+
+eps2 = eps**2
+d = eps
+c(1) = d*((6-eps2)*eps2-16)/32
+d = d * eps
+c(2) = d*((64-9*eps2)*eps2-128)/2048
+d = d * eps
+c(3) = d*(9*eps2-16)/768
+d = d * eps
+c(4) = d*(3*eps2-5)/512
+d = d * eps
+c(5) = -7*d/1280
+d = d * eps
+c(6) = -7*d/2048
+
+RETURN
+END SUBROUTINE c1f
+
+SUBROUTINE c1pf(eps, c)
+! The coefficients C1p[l] in the Fourier expansion of B1p
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc1p = ord
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(OUT)            :: c(nc1p)
+
+
+! input
+
+! output
+
+
+DOUBLE PRECISION :: eps2, d
+
+eps2 = eps**2
+d = eps
+c(1) = d*(eps2*(205*eps2-432)+768)/1536
+d = d * eps
+c(2) = d*(eps2*(4005*eps2-4736)+3840)/12288
+d = d * eps
+c(3) = d*(116-225*eps2)/384
+d = d * eps
+c(4) = d*(2695-7173*eps2)/7680
+d = d * eps
+c(5) = 3467*d/7680
+d = d * eps
+c(6) = 38081*d/61440
+
+RETURN
+END SUBROUTINE c1pf
+
+! The scale factor A2-1 = mean value of (d/dsigma)I2 - 1
+
+DOUBLE PRECISION FUNCTION a2m1f(eps)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+
+
+DOUBLE PRECISION :: eps2, t
+
+eps2 = eps**2
+t = eps2*(eps2*(25*eps2+36)+64)/256
+a2m1f = t * (1 - eps) - eps
+
+RETURN
+END FUNCTION a2m1f
+
+SUBROUTINE c2f(eps, c)
+! The coefficients C2[l] in the Fourier expansion of B2
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc2 = ord
+
+DOUBLE PRECISION, INTENT(IN)             :: eps
+DOUBLE PRECISION, INTENT(OUT)            :: c(nc2)
+
+
+! input
+
+! output
+
+
+DOUBLE PRECISION :: eps2, d
+
+eps2 = eps**2
+d = eps
+c(1) = d*(eps2*(eps2+2)+16)/32
+d = d * eps
+c(2) = d*(eps2*(35*eps2+64)+384)/2048
+d = d * eps
+c(3) = d*(15*eps2+80)/768
+d = d * eps
+c(4) = d*(7*eps2+35)/512
+d = d * eps
+c(5) = 63*d/1280
+d = d * eps
+c(6) = 77*d/2048
+
+RETURN
+END SUBROUTINE c2f
+
+SUBROUTINE a3cof(n, a3x)
+! The scale factor A3 = mean value of (d/dsigma)I3
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: na3 = ord
+INTEGER, PARAMETER :: na3x = na3
+
+DOUBLE PRECISION, INTENT(IN)             :: n
+DOUBLE PRECISION, INTENT(OUT)            :: a3x(0:na3x-1)
+
+
+! input
+
+! output
+
+
+a3x(0) = 1
+a3x(1) = (n-1)/2
+a3x(2) = (n*(3*n-1)-2)/8
+a3x(3) = ((-n-3)*n-1)/16
+a3x(4) = (-2*n-3)/64
+a3x(5) = -3/128D0
+
+RETURN
+END SUBROUTINE a3cof
+
+SUBROUTINE c3cof(n, c3x)
+! The coefficients C3[l] in the Fourier expansion of B3
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc3 = ord
+INTEGER, PARAMETER :: nc3x = (nc3 * (nc3 - 1)) / 2
+
+DOUBLE PRECISION, INTENT(IN)             :: n
+DOUBLE PRECISION, INTENT(OUT)            :: c3x(0:nc3x-1)
+
+
+! input
+
+! output
+
+
+c3x(0) = (1-n)/4
+c3x(1) = (1-n*n)/8
+c3x(2) = ((3-n)*n+3)/64
+c3x(3) = (2*n+5)/128
+c3x(4) = 3/128D0
+c3x(5) = ((n-3)*n+2)/32
+c3x(6) = ((-3*n-2)*n+3)/64
+c3x(7) = (n+3)/128
+c3x(8) = 5/256D0
+c3x(9) = (n*(5*n-9)+5)/192
+c3x(10) = (9-10*n)/384
+c3x(11) = 7/512D0
+c3x(12) = (7-14*n)/512
+c3x(13) = 7/512D0
+c3x(14) = 21/2560D0
+
+RETURN
+END SUBROUTINE c3cof
+
+! Generated by Maxima on 2012-10-19 08:02:34-04:00
+
+SUBROUTINE c4cof(n, c4x)
+! The coefficients C4[l] in the Fourier expansion of I4
+INTEGER, PARAMETER :: ord = 6
+INTEGER, PARAMETER :: nc4 = ord
+INTEGER, PARAMETER :: nc4x = (nc4 * (nc4 + 1)) / 2
+
+DOUBLE PRECISION, INTENT(IN)             :: n
+DOUBLE PRECISION, INTENT(OUT)            :: c4x(0:nc4x-1)
+
+
+! input
+
+! output
+
+
+c4x(0) = (n*(n*(n*(n*(100*n+208)+572)+3432)-12012)+30030)/45045
+c4x(1) = (n*(n*(n*(64*n+624)-4576)+6864)-3003)/15015
+c4x(2) = (n*((14144-10656*n)*n-4576)-858)/45045
+c4x(3) = ((-224*n-4784)*n+1573)/45045
+c4x(4) = (1088*n+156)/45045
+c4x(5) = 97/15015D0
+c4x(6) = (n*(n*((-64*n-624)*n+4576)-6864)+3003)/135135
+c4x(7) = (n*(n*(5952*n-11648)+9152)-2574)/135135
+c4x(8) = (n*(5792*n+1040)-1287)/135135
+c4x(9) = (468-2944*n)/135135
+c4x(10) = 1/9009D0
+c4x(11) = (n*((4160-1440*n)*n-4576)+1716)/225225
+c4x(12) = ((4992-8448*n)*n-1144)/225225
+c4x(13) = (1856*n-936)/225225
+c4x(14) = 8/10725D0
+c4x(15) = (n*(3584*n-3328)+1144)/315315
+c4x(16) = (1024*n-208)/105105
+c4x(17) = -136/63063D0
+c4x(18) = (832-2560*n)/405405
+c4x(19) = -128/135135D0
+c4x(20) = 128/99099D0
+
+RETURN
+END SUBROUTINE c4cof
+
+DOUBLE PRECISION FUNCTION sumx(u, v, t)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: u
+DOUBLE PRECISION, INTENT(IN)             :: v
+DOUBLE PRECISION, INTENT(OUT)            :: t
+
+! output
+
+
+DOUBLE PRECISION :: up, vpp
+
+sumx = u + v
+up = sumx - v
+vpp = sumx - up
+up = up - u
+vpp = vpp - v
+t = -(up + vpp)
+
+RETURN
+END FUNCTION sumx
+
+DOUBLE PRECISION FUNCTION angnm(x)
+! input
+
+
+DOUBLE PRECISION, INTENT(IN)             :: x
+
+
+IF (x >= 180) THEN
+  angnm = x - 360
+ELSE IF (x < -180) THEN
+  angnm = x + 360
+ELSE
+  angnm = x
+END IF
+
+RETURN
+END FUNCTION angnm
+
+DOUBLE PRECISION FUNCTION angnm2(x)
+! input
+
+DOUBLE PRECISION, INTENT(IN OUT)         :: x
+
+
+DOUBLE PRECISION :: angnm
+
+angnm2 = MOD(x, 360D0)
+angnm2 = angnm(angnm2)
+
+RETURN
+END FUNCTION angnm2
+
+DOUBLE PRECISION FUNCTION angdif(x, y)
+! Compute y - x.  x and y must both lie in [-180, 180].  The result is
+! equivalent to computing the difference exactly, reducing it to (-180,
+! 180] and rounding the result.  Note that this prescription allows -180
+! to be returned (e.g., if x is tiny and negative and y = 180).
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: x
+DOUBLE PRECISION, INTENT(IN)             :: y
+
+
+DOUBLE PRECISION :: d, t, sumx
+
+d = sumx(-x, y, t)
+IF ((d - 180D0) + t > 0D0) THEN
+  d = d - 360D0
+ELSE IF ((d + 180D0) + t <= 0D0) THEN
+  d = d + 360D0
+END IF
+angdif = d + t
+
+RETURN
+END FUNCTION angdif
+
+DOUBLE PRECISION FUNCTION angrnd(x)
+! The makes the smallest gap in x = 1/16 - nextafter(1/16, 0) = 1/2^57
+! for reals = 0.7 pm on the earth if x is an angle in degrees.  (This
+! is about 1000 times more resolution than we get with angles around 90
+! degrees.)  We use this to avoid having to deal with near singular
+! cases when x is non-zero but tiny (e.g., 1.0e-200).
+! input
+
+DOUBLE PRECISION, INTENT(IN)         :: x
+
+
+DOUBLE PRECISION :: y, z
+
+z = 1/16D0
+y = ABS(x)
+! The compiler mustn't "simplify" z - (z - y) to y
+IF (y < z) y = z - (z - y)
+angrnd = SIGN(y, x)
+
+RETURN
+END FUNCTION angrnd
+
+SUBROUTINE swap(x, y)
+! input/output
+
+DOUBLE PRECISION, INTENT(IN OUT)         :: x
+DOUBLE PRECISION, INTENT(IN OUT)         :: y
+
+
+DOUBLE PRECISION :: z
+
+z = x
+x = y
+y = z
+
+RETURN
+END SUBROUTINE swap
+
+DOUBLE PRECISION FUNCTION hypotx(x, y)
+! input
+
+
+DOUBLE PRECISION, INTENT(IN OUT)         :: x
+DOUBLE PRECISION, INTENT(IN)             :: y
+
+
+hypotx = SQRT(x**2 + y**2)
+
+RETURN
+END FUNCTION hypotx
+
+SUBROUTINE norm(sinx, cosx)
+! input/output
+
+DOUBLE PRECISION, INTENT(OUT)            :: sinx
+DOUBLE PRECISION, INTENT(OUT)            :: cosx
+
+
+DOUBLE PRECISION :: hypotx, r
+
+r = hypotx(sinx, cosx)
+sinx = sinx/r
+cosx = cosx/r
+
+RETURN
+END SUBROUTINE norm
+
+DOUBLE PRECISION FUNCTION log1px(x)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: x
+
+
+DOUBLE PRECISION :: csmgt, y, z
+
+y = 1 + x
+z = y - 1
+log1px = csmgt(x, x * LOG(y) / z, z .eq. 0)
+
+RETURN
+END FUNCTION log1px
+
+DOUBLE PRECISION FUNCTION atanhx(x)
+! input
+
+DOUBLE PRECISION, INTENT(IN)         :: x
+
+
+DOUBLE PRECISION :: log1px, y
+
+y = ABS(x)
+y = log1px(2 * y/(1 - y))/2
+atanhx = SIGN(y, x)
+
+RETURN
+END FUNCTION atanhx
+
+DOUBLE PRECISION FUNCTION cbrt(x)
+! input
+
+
+DOUBLE PRECISION, INTENT(IN)         :: x
+
+
+cbrt = SIGN(ABS(x)**(1/3D0), x)
+
+RETURN
+END FUNCTION cbrt
+
+DOUBLE PRECISION FUNCTION csmgt(x, y, p)
+! input
+
+DOUBLE PRECISION, INTENT(IN)             :: x
+DOUBLE PRECISION, INTENT(IN)             :: y
+LOGICAL, INTENT(IN)                  :: p
+
+
+
+IF (p) THEN
+  csmgt = x
+ELSE
+  csmgt = y
+END IF
+
+RETURN
+END FUNCTION csmgt
+
+DOUBLE PRECISION FUNCTION trgsum(sinp, sinx, cosx, c, n)
+! Evaluate
+! y = sinp ? sum(c[i] * sin( 2*i    * x), i, 1, n) :
+!            sum(c[i] * cos((2*i-1) * x), i, 1, n)
+! using Clenshaw summation.
+! Approx operation count = (n + 5) mult and (2 * n + 2) add
+! input
+
+LOGICAL, INTENT(IN)                  :: sinp
+DOUBLE PRECISION, INTENT(IN)             :: sinx
+DOUBLE PRECISION, INTENT(IN)             :: cosx
+DOUBLE PRECISION, INTENT(IN)             :: c(n)
+INTEGER, INTENT(IN)                      :: n
+
+
+
+
+DOUBLE PRECISION :: ar, y0, y1
+INTEGER :: n2, k
+
+! 2 * cos(2 * x)
+ar = 2 * (cosx - sinx) * (cosx + sinx)
+! accumulators for sum
+IF (MOD(n, 2) == 1) THEN
+  y0 = c(n)
+  n2 = n - 1
+ELSE
+  y0 = 0
+  n2 = n
+END IF
+y1 = 0
+! Now n2 is even
+DO  k = n2, 1, -2
+! Unroll loop x 2, so accumulators return to their original role
+  y1 = ar * y0 - y1 + c(k)
+  y0 = ar * y1 - y0 + c(k-1)
+END DO
+IF (sinp) THEN
+! sin(2 * x) * y0
+  trgsum = 2 * sinx * cosx * y0
+ELSE
+! cos(x) * (y0 - y1)
+  trgsum = cosx * (y0 - y1)
+END IF
+
+RETURN
+END FUNCTION trgsum
+
+INTEGER FUNCTION trnsit(lon1, lon2)
+! input
+
+DOUBLE PRECISION, INTENT(IN)         :: lon1
+DOUBLE PRECISION, INTENT(IN)         :: lon2
+
+
+DOUBLE PRECISION :: lon1x, lon2x, lon12, angnm, angdif
+
+lon1x = angnm(lon1)
+lon2x = angnm(lon2)
+lon12 = angdif(lon1x, lon2x)
+trnsit = 0
+IF (lon1x < 0 .AND. lon2x >= 0 .AND. lon12 > 0) THEN
+  trnsit = 1
+ELSE IF (lon2x < 0 .AND. lon1x >= 0 .AND. lon12 < 0) THEN
+  trnsit = -1
+END IF
+
+RETURN
+END FUNCTION trnsit
+
+SUBROUTINE accini(s)
+! Initialize an accumulator; this is an array with two elements.
+! input/output
+
+
+DOUBLE PRECISION, INTENT(OUT)            :: s(2)
+
+
+s(1) = 0
+s(2) = 0
+
+RETURN
+END SUBROUTINE accini
+
+SUBROUTINE accadd(s, y)
+! Add y to an accumulator.
+! input
+
+DOUBLE PRECISION, INTENT(IN OUT)         :: s(2)
+DOUBLE PRECISION, INTENT(IN OUT)         :: y
+
+! input/output
+
+
+DOUBLE PRECISION :: z, u, sumx
+
+z = sumx(y, s(2), u)
+s(1) = sumx(z, s(1), s(2))
+IF (s(1) == 0) THEN
+  s(1) = u
+ELSE
+  s(2) = s(2) + u
+END IF
+
+RETURN
+END SUBROUTINE accadd
+
+! Table of name abbreviations to conform to the 6-char limit
+!    A3coeff       A3cof
+!    C3coeff       C3cof
+!    C4coeff       C4cof
+!    AngNormalize  AngNm
+!    AngNormalize2 AngNm2
+!    AngDiff       AngDif
+!    AngRound      AngRnd
+!    arcmode       arcmod
+!    Astroid       Astrd
+!    betscale      betscl
+!    lamscale      lamscl
+!    cbet12a       cbt12a
+!    sbet12a       sbt12a
+!    epsilon       dbleps
+!    realmin       dblmin
+!    geodesic      geod
+!    inverse       invers
+!    InverseStart  InvSta
+!    Lambda12      Lam12f
+!    latsign       latsgn
+!    lonsign       lonsgn
+!    Lengths       Lengs
+!    meridian      merid
+!    outmask       omask
+!    shortline     shortp
+!    SinCosNorm    Norm
+!    SinCosSeries  TrgSum
+!    xthresh       xthrsh
+!    transit       trnsit
+!> @endcond SKIP
